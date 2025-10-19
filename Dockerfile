@@ -1,4 +1,3 @@
-# Use Node image
 FROM node:18-alpine
 
 WORKDIR /app
@@ -6,7 +5,7 @@ WORKDIR /app
 # Copy package files
 COPY package.json package-lock.json* ./
 
-# Install dependencies with multiple fallback strategies
+# Install dependencies
 RUN npm install
 
 # Copy application code
