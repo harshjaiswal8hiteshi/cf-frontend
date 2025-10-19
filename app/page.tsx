@@ -3,8 +3,7 @@ import { useEffect, useState } from "react";
 import { Activity, Database, Zap, Server, AlertCircle, Loader2 } from "lucide-react";
 import config from "../config"; 
 
-
-// Define proper types for the API responses lksd
+// Define proper types for the API responses
 interface BackendStatus {
   app: string;
   db_connected: boolean;
@@ -16,8 +15,8 @@ interface AIStatus {
   app: string;
   status: string;
   backend_to_ai_connection: boolean;
-  db_connected: boolean;     // added
-  redis_connected: boolean;  // added
+  db_connected: boolean;
+  redis_connected: boolean;
 }
 
 interface DashboardStatus {
@@ -36,6 +35,10 @@ export default function Home() {
   useEffect(() => {
     async function fetchStatus() {
       try {
+        if (!appBackendUrl || !aiBackendUrl) {
+          throw new Error("Backend URLs are not defined");
+        }
+
         const [backendResponse, aiResponse] = await Promise.all([
           fetch(appBackendUrl),
           fetch(aiBackendUrl)
