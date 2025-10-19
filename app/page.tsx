@@ -4,11 +4,6 @@ import { Activity, Database, Zap, Server, AlertCircle, Loader2 } from "lucide-re
 import config from "../config"; 
 
 
-
-
-
-
-
 // Define proper types for the API responses lksd
 interface BackendStatus {
   app: string;
