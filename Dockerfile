@@ -3,6 +3,9 @@ FROM node:18-alpine
 
 WORKDIR /app
 
+# Install curl for health checks
+RUN apk add --no-cache curl
+
 # Copy package files first for caching
 COPY package.json package-lock.json ./
 
@@ -15,7 +18,7 @@ COPY . .
 # Build Next.js app
 RUN npm run build
 
-# Expose the port your app runs on
+# Expose container port
 EXPOSE 3000
 
 # Start the frontend app
