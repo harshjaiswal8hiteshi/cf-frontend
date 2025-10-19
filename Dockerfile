@@ -10,7 +10,7 @@ RUN apk add --no-cache curl
 COPY package.json package-lock.json ./
 
 # Install dependencies
-RUN npm install
+RUN npm i
 
 # Copy the rest of the app
 COPY . .
