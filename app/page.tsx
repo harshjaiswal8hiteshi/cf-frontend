@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Activity, Database, Zap, Server, AlertCircle, Loader2 } from "lucide-react";
 import config from "../config";
 
-// Define proper types for the API responses
+// Define proper types for the API responses lksd
 interface BackendStatus {
   app: string;
   db_connected: boolean;
