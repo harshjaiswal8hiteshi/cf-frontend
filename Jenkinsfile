@@ -9,7 +9,7 @@ pipeline {
         LIVE_PORT = 3000
         NEW_PORT  = 3001
         IMAGE_TAG = "ecosystem-frontend:latest"
-        NETWORK   = "ecosystem_default" // ✅ use same network as other containers
+        NETWORK   = "ecosystem_default" // container network
         NEXT_PUBLIC_APP_BACKEND_URL = "http://localhost:8000"
         NEXT_PUBLIC_AI_BACKEND_URL  = "http://localhost:8082"
     }
@@ -49,7 +49,10 @@ pipeline {
             steps {
                 script {
                     echo "🧱 Deploying new container instance..."
+                    // Remove any previous new container
                     sh "docker rm -f ${APP_NAME}-new || true"
+
+                    // Run new container on NEW_PORT
                     sh """
                         docker run -d \
                         --name ${APP_NAME}-new \
@@ -86,6 +89,7 @@ pipeline {
                     }
 
                     if (!success) {
+                        // If health check fails, remove new container but keep live running
                         sh "docker rm -f ${APP_NAME}-new || true"
                         error "❌ Deployment failed: new container did not respond correctly"
                     }
@@ -98,17 +102,17 @@ pipeline {
                 script {
                     echo "🔄 Switching traffic to new container..."
                     def liveContainerExists = sh(
-                        script: "docker ps -q -f name=${APP_NAME}-live",
+                        script: "docker ps -aq -f name=${APP_NAME}-live",
                         returnStdout: true
                     ).trim()
 
                     if (liveContainerExists) {
-                        echo "Stopping old live container..."
+                        // Stop and remove old live container
                         sh "docker rm -f ${APP_NAME}-live"
-                    } else {
-                        echo "No old live container found — first deployment or previous container down."
+                        echo "🛑 Old live container removed."
                     }
 
+                    // Rename new container to live
                     sh "docker rename ${APP_NAME}-new ${APP_NAME}-live"
                     echo "✅ Switched traffic to new live container!"
                 }
@@ -117,8 +121,15 @@ pipeline {
 
         stage('Cleanup') {
             steps {
-                echo "🧹 Deployment complete. Old container cleaned up if any."
+                echo "🧹 Deployment complete. Only live container is running."
+                sh "docker image prune -f" // optional cleanup
             }
+        }
+    }
+
+    post {
+        failure {
+            echo "❌ Deployment failed. Live container remains running if any."
         }
     }
 }
