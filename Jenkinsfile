@@ -36,8 +36,16 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                echo "🚀 Building Docker image..."
-                sh "docker build -t ${IMAGE_TAG} ."
+                timeout(time: 10, unit: 'MINUTES') {
+                    echo "🚀 Building Docker image..."
+                    sh """
+                        docker build \
+                            --network=host \
+                            --progress=plain \
+                            --no-cache \
+                            -t ${IMAGE_TAG} .
+                    """
+                }
             }
         }
 
