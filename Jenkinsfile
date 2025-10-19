@@ -10,6 +10,8 @@ pipeline {
         NEW_PORT  = 3001
         IMAGE_TAG = "ecosystem-frontend:latest"
         NETWORK   = "ecosystem_default" // ✅ use same network as other containers
+        NEXT_PUBLIC_APP_BACKEND_URL = "http://localhost:8000"
+        NEXT_PUBLIC_AI_BACKEND_URL  = "http://localhost:8082"
     }
 
     stages {
@@ -19,6 +21,19 @@ pipeline {
                     def now = new Date().format("yyyy-MM-dd HH:mm:ss")
                     echo "✅ New commit received from GitHub at ${now}"
                     sh 'echo "✅ Commit received at ${now}" >> /var/jenkins_home/github_commit_log.txt'
+                }
+            }
+        }
+
+        stage('Prepare .env') {
+            steps {
+                script {
+                    echo "📄 Creating .env file in app folder..."
+                    writeFile file: 'app/.env', text: 
+                    """
+                        NEXT_PUBLIC_APP_BACKEND_URL=${env.NEXT_PUBLIC_APP_BACKEND_URL}
+                        NEXT_PUBLIC_AI_BACKEND_URL=${env.NEXT_PUBLIC_AI_BACKEND_URL}
+                    """
                 }
             }
         }
@@ -34,11 +49,7 @@ pipeline {
             steps {
                 script {
                     echo "🧱 Deploying new container instance..."
-
-                    // Remove any previous new container if it exists
                     sh "docker rm -f ${APP_NAME}-new || true"
-
-                    // Run the new container on the same Docker network
                     sh """
                         docker run -d \
                         --name ${APP_NAME}-new \
@@ -86,8 +97,6 @@ pipeline {
             steps {
                 script {
                     echo "🔄 Switching traffic to new container..."
-
-                    // Stop old live container if it exists
                     def liveContainerExists = sh(
                         script: "docker ps -q -f name=${APP_NAME}-live",
                         returnStdout: true
@@ -100,7 +109,6 @@ pipeline {
                         echo "No old live container found — first deployment or previous container down."
                     }
 
-                    // Rename new container to live
                     sh "docker rename ${APP_NAME}-new ${APP_NAME}-live"
                     echo "✅ Switched traffic to new live container!"
                 }
