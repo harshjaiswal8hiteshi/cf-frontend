@@ -52,21 +52,14 @@ pipeline {
         stage('Deploy New Instance for Health Check') {
             steps {
                 script {
-                    echo "🧱 Running new container on random port for health check..."
+                    echo "🧱 Running new container for health check..."
                     // Remove any temp container
                     sh "docker rm -f ${APP_NAME}-temp || true"
 
-                    // Run on random host port (Docker assigns automatically with -P)
-                    sh "docker run -d -P --name ${APP_NAME}-temp --network ${NETWORK} ${IMAGE_TAG}"
+                    // Run container on the same Docker network (no port mapping needed for internal access)
+                    sh "docker run -d --name ${APP_NAME}-temp --network ${NETWORK} ${IMAGE_TAG}"
 
-                    // Get dynamically assigned host port
-                    def hostPort = sh(
-                        script: "docker port ${APP_NAME}-temp 3000 | cut -d':' -f2",
-                        returnStdout: true
-                    ).trim()
-
-                    env.NEW_HOST_PORT = hostPort
-                    echo "🧪 Temp container running on host port ${hostPort}"
+                    echo "🧪 Temp container running, accessible via Docker network at ${APP_NAME}-temp:3000"
                 }
             }
         }
@@ -82,8 +75,9 @@ pipeline {
                     sleep 3
 
                     for (int i = 0; i < retries; i++) {
+                        // Access container directly via Docker network DNS
                         def status = sh(
-                            script: "curl -s -o /dev/null -w '%{http_code}' http://localhost:${env.NEW_HOST_PORT}/api/health || echo '000'",
+                            script: "curl -s -o /dev/null -w '%{http_code}' http://${APP_NAME}-temp:3000/api/health || echo '000'",
                             returnStdout: true
                         ).trim()
 
