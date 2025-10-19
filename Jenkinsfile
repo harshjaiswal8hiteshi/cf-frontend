@@ -1,15 +1,12 @@
 pipeline {
     agent any
-    triggers {
-        githubPush()
-    }
+    triggers { githubPush() }
 
     environment {
         APP_NAME = "frontend"
-        LIVE_PORT = 3000
-        NEW_PORT  = 3001
+        HOST_PORT = 3000
         IMAGE_TAG = "ecosystem-frontend:latest"
-        NETWORK   = "ecosystem_default" // container network
+        NETWORK   = "ecosystem_default"
         NEXT_PUBLIC_APP_BACKEND_URL = "http://localhost:8000"
         NEXT_PUBLIC_AI_BACKEND_URL  = "http://localhost:8082"
     }
@@ -32,11 +29,10 @@ pipeline {
                     writeFile file: '.env', text: """
                         NEXT_PUBLIC_APP_BACKEND_URL=${env.NEXT_PUBLIC_APP_BACKEND_URL}
                         NEXT_PUBLIC_AI_BACKEND_URL=${env.NEXT_PUBLIC_AI_BACKEND_URL}
-                    """ 
+                    """
                 }
             }
         }
-
 
         stage('Build Docker Image') {
             steps {
@@ -45,21 +41,27 @@ pipeline {
             }
         }
 
-        stage('Deploy New Instance') {
+        stage('Deploy New Instance for Health Check') {
             steps {
                 script {
-                    echo "🧱 Deploying new container instance..."
-                    // Remove any previous new container
-                    sh "docker rm -f ${APP_NAME}-new || true"
+                    echo "🧱 Running new container on random port for health check..."
+                    // Remove any temp container
+                    sh "docker rm -f ${APP_NAME}-temp || true"
 
-                    // Run new container on NEW_PORT
-                    sh """
-                        docker run -d \
-                        --name ${APP_NAME}-new \
-                        --network ${NETWORK} \
-                        -p ${NEW_PORT}:3000 \
-                        ${IMAGE_TAG}
-                    """
+                    // Run on random host port (Docker assigns automatically)
+                    def tempPort = sh(
+                        script: "docker run -d -P --name ${APP_NAME}-temp --network ${NETWORK} ${IMAGE_TAG}",
+                        returnStdout: true
+                    ).trim()
+
+                    // Get dynamically assigned host port
+                    def hostPort = sh(
+                        script: "docker port ${APP_NAME}-temp 3000 | cut -d':' -f2",
+                        returnStdout: true
+                    ).trim()
+
+                    env.NEW_HOST_PORT = hostPort
+                    echo "🧪 Temp container running on host port ${hostPort}"
                 }
             }
         }
@@ -73,7 +75,7 @@ pipeline {
 
                     for (int i = 0; i < retries; i++) {
                         def status = sh(
-                            script: "curl -s -o /dev/null -w \"%{http_code}\" http://${APP_NAME}-new:3000/api/health || echo '000'",
+                            script: "curl -s -o /dev/null -w \"%{http_code}\" http://localhost:${env.NEW_HOST_PORT}/api/health || echo '000'",
                             returnStdout: true
                         ).trim()
 
@@ -89,40 +91,35 @@ pipeline {
                     }
 
                     if (!success) {
-                        // If health check fails, remove new container but keep live running
-                        sh "docker rm -f ${APP_NAME}-new || true"
+                        sh "docker rm -f ${APP_NAME}-temp || true"
                         error "❌ Deployment failed: new container did not respond correctly"
                     }
                 }
             }
         }
 
-        stage('Switch Traffic') {
+        stage('Switch Traffic to Host Port 3000') {
             steps {
                 script {
                     echo "🔄 Switching traffic to new container..."
-                    def liveContainerExists = sh(
-                        script: "docker ps -aq -f name=${APP_NAME}-live",
-                        returnStdout: true
-                    ).trim()
+                    // Stop old live container if exists
+                    sh "docker rm -f ${APP_NAME}-live || true"
 
-                    if (liveContainerExists) {
-                        // Stop and remove old live container
-                        sh "docker rm -f ${APP_NAME}-live"
-                        echo "🛑 Old live container removed."
-                    }
-
-                    // Rename new container to live
-                    sh "docker rename ${APP_NAME}-new ${APP_NAME}-live"
-                    echo "✅ Switched traffic to new live container!"
+                    // Stop temp container and start new container on HOST_PORT
+                    sh """
+                        docker stop ${APP_NAME}-temp || true
+                        docker rm ${APP_NAME}-temp || true
+                        docker run -d --name ${APP_NAME}-live --network ${NETWORK} -p ${HOST_PORT}:3000 ${IMAGE_TAG}
+                    """
+                    echo "✅ Traffic switched: host port ${HOST_PORT} points to new live container"
                 }
             }
         }
 
         stage('Cleanup') {
             steps {
-                echo "🧹 Deployment complete. Only live container is running."
-                sh "docker image prune -f" // optional cleanup
+                echo "🧹 Deployment complete. Cleaning up old images..."
+                sh "docker image prune -f"
             }
         }
     }
