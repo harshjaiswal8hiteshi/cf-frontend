@@ -259,7 +259,7 @@ export default function Home() {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'white' }}>
                 <Activity size={24} />
-                <h2 style={{ fontSize: '20px', fontWeight: '600', margin: 0 }}>AI Backend</h2>
+                <h2 style={{ fontSize: '20px', fontWeight: '600', margin: 0 }}>AI Backend Metric</h2>
               </div>
             </div>
 
