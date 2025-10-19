@@ -308,6 +308,7 @@ export default function Home() {
                   padding: '12px 0',
                   borderBottom: '1px solid #f3f4f6'
                 }}
+                
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#374151' }}>
                   <Database size={20} />
