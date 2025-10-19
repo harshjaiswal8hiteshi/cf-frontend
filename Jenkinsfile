@@ -3,6 +3,7 @@ pipeline {
     triggers {
         githubPush()
     }
+
     
     stages {
         stage('Log Commit') {
