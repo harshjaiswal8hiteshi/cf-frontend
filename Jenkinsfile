@@ -22,8 +22,7 @@ pipeline {
                     def now = new Date().format("yyyy-MM-dd HH:mm:ss")
                     echo "✅ New commit received from GitHub at ${now}"
                     sh "echo '✅ Commit received at ${now}' >> /var/jenkins_home/github_commit_log.txt"
-                    def end = System.currentTimeMillis()
-                    def duration = (end - start) / 1000
+                    def duration = (System.currentTimeMillis() - start) / 1000
                     echo "🕒 Time taken for 'Log Commit': ${duration}s"
                 }
             }
@@ -39,8 +38,7 @@ pipeline {
                             echo \$DOCKERHUB_PASS | docker login -u \$DOCKERHUB_USER --password-stdin
                         """
                     }
-                    def end = System.currentTimeMillis()
-                    def duration = (end - start) / 1000
+                    def duration = (System.currentTimeMillis() - start) / 1000
                     echo "🕒 Time taken for 'Docker Login': ${duration}s"
                 }
             }
@@ -51,20 +49,14 @@ pipeline {
                 script {
                     def start = System.currentTimeMillis()
                     echo "📦 Checking if base image ${BASE_IMAGE} exists locally..."
-                    def imageExists = sh(
-                        script: "docker images -q ${BASE_IMAGE} || true",
-                        returnStdout: true
-                    ).trim()
-
+                    def imageExists = sh(script: "docker images -q ${BASE_IMAGE} || true", returnStdout: true).trim()
                     if (!imageExists) {
                         echo "🛠 Base image missing, pulling ${BASE_IMAGE}..."
                         sh "docker pull ${BASE_IMAGE}"
                     } else {
                         echo "✅ Base image already cached locally."
                     }
-
-                    def end = System.currentTimeMillis()
-                    def duration = (end - start) / 1000
+                    def duration = (System.currentTimeMillis() - start) / 1000
                     echo "🕒 Time taken for 'Ensure Base Image': ${duration}s"
                 }
             }
@@ -76,8 +68,7 @@ pipeline {
                     def start = System.currentTimeMillis()
                     echo "🚀 Building Docker image..."
                     sh "docker build -t ${IMAGE_TAG} ."
-                    def end = System.currentTimeMillis()
-                    def duration = (end - start) / 1000
+                    def duration = (System.currentTimeMillis() - start) / 1000
                     echo "🕒 Time taken for 'Build Docker Image': ${duration}s"
                 }
             }
@@ -87,6 +78,8 @@ pipeline {
             steps {
                 script {
                     def start = System.currentTimeMillis()
+
+                    // Determine which version is active
                     def active = sh(
                         script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
                         returnStdout: true
@@ -105,8 +98,8 @@ pipeline {
                         -p ${newPort}:3000 \
                         ${IMAGE_TAG}
                     """
-                    def end = System.currentTimeMillis()
-                    def duration = (end - start) / 1000
+
+                    def duration = (System.currentTimeMillis() - start) / 1000
                     echo "🕒 Time taken for 'Deploy New Instance': ${duration}s"
                 }
             }
@@ -117,6 +110,7 @@ pipeline {
                 script {
                     def start = System.currentTimeMillis()
                     echo "🩺 Checking health of new instance..."
+
                     def retries = 5
                     def success = false
 
@@ -125,32 +119,33 @@ pipeline {
                         returnStdout: true
                     ).trim()
                     def newVersion = (active == "blue") ? "green" : "blue"
-                    def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
+                    def containerName = "frontend-${newVersion}"
+
+                    // Wait briefly for app startup
+                    sleep 5
 
                     for (int i = 0; i < retries; i++) {
                         def status = sh(
-                            script: "curl -s -o /dev/null -w \"%{http_code}\" http://localhost:${newPort}/api/health || echo '000'",
+                            script: "docker exec ${containerName} sh -c 'curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/api/health || echo 000'",
                             returnStdout: true
                         ).trim()
 
                         echo "Health check attempt ${i + 1}: HTTP ${status}"
 
                         if (status == "200") {
-                            success = true
                             echo "✅ Health check passed!"
+                            success = true
                             break
                         }
-
                         sleep 5
                     }
 
                     if (!success) {
-                        sh "docker rm -f frontend-${newVersion} || true"
+                        sh "docker rm -f ${containerName} || true"
                         error "❌ Deployment failed: new container did not respond correctly"
                     }
 
-                    def end = System.currentTimeMillis()
-                    def duration = (end - start) / 1000
+                    def duration = (System.currentTimeMillis() - start) / 1000
                     echo "🕒 Time taken for 'Health Check': ${duration}s"
                 }
             }
@@ -166,7 +161,6 @@ pipeline {
                         script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
                         returnStdout: true
                     ).trim()
-
                     def newVersion = (active == "blue") ? "green" : "blue"
                     def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
 
@@ -179,8 +173,7 @@ pipeline {
 
                     echo "✅ Traffic switched to frontend-${newVersion} via /cf-frontend"
 
-                    def end = System.currentTimeMillis()
-                    def duration = (end - start) / 1000
+                    def duration = (System.currentTimeMillis() - start) / 1000
                     echo "🕒 Time taken for 'Switch Traffic via Nginx': ${duration}s"
                 }
             }
@@ -190,15 +183,17 @@ pipeline {
             steps {
                 script {
                     def start = System.currentTimeMillis()
+
                     def active = sh(
                         script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
                         returnStdout: true
                     ).trim()
-                    def oldVersion = (active == "blue") ? "blue" : "green"
+                    def oldVersion = (active == "blue") ? "green" : "blue"
+
                     echo "🧹 Removing old container: frontend-${oldVersion}"
                     sh "docker rm -f frontend-${oldVersion} || true"
-                    def end = System.currentTimeMillis()
-                    def duration = (end - start) / 1000
+
+                    def duration = (System.currentTimeMillis() - start) / 1000
                     echo "🕒 Time taken for 'Cleanup': ${duration}s"
                 }
             }
