@@ -100,45 +100,49 @@ pipeline {
         stage('Health Check') {
             steps {
                 script {
-                    echo "🩺 Checking health of new instance on port ${env.NEW_PORT}..."
+                    echo "🩺 Checking health of new instance: frontend-${env.NEW_VERSION}..."
+                    echo "📍 Container: frontend-${env.NEW_VERSION}, Internal port: 3000, External port: ${env.NEW_PORT}"
                     
-                    // Check if container is running
-                    sh "docker ps | grep frontend-${env.NEW_VERSION}"
-                    
-                    // Check container logs
-                    echo "📋 Container logs:"
-                    sh "docker logs frontend-${env.NEW_VERSION} | tail -20"
-                    
-                    def retries = 6
+                    def retries = 10
                     def success = false
 
                     echo "⏳ Waiting for container startup..."
                     sleep 15
 
                     for (int i = 0; i < retries; i++) {
+                        // IMPORTANT: Always check port 3000 inside the container
+                        // The external port (3000/3001) is only for host access
                         def status = sh(
-                            script: "curl -v http://localhost:${env.NEW_PORT}/api/health 2>&1 | grep '< HTTP' | awk '{print \$3}' || echo '000'",
+                            script: """
+                                docker run --rm --network ${NETWORK} alpine/curl:latest \
+                                -s -o /dev/null -w '%{http_code}' \
+                                http://frontend-${env.NEW_VERSION}:3000/api/health || echo '000'
+                            """,
                             returnStdout: true
                         ).trim()
+                        
                         echo "Health check attempt ${i + 1}: HTTP ${status}"
+                        
                         if (status == "200") {
                             success = true
                             echo "✅ Health check passed!"
+                            echo "🌐 Service accessible externally at: http://host:${env.NEW_PORT}"
                             break
                         }
                         sleep 5
                     }
 
                     if (!success) {
-                        echo "📋 Final container logs before cleanup:"
-                        sh "docker logs frontend-${env.NEW_VERSION}"
+                        echo "📋 Container logs:"
+                        sh "docker logs frontend-${env.NEW_VERSION} | tail -30"
+                        echo "🔍 Container status:"
+                        sh "docker ps -a | grep frontend-${env.NEW_VERSION}"
                         sh "docker rm -f frontend-${env.NEW_VERSION} || true"
                         error "❌ Deployment failed: new container did not respond correctly"
                     }
                 }
             }
         }
-
         stage('Cleanup Old Container') {
             steps {
                 script {
