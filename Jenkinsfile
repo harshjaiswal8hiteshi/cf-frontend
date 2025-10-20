@@ -101,15 +101,23 @@ pipeline {
             steps {
                 script {
                     echo "🩺 Checking health of new instance on port ${env.NEW_PORT}..."
+                    
+                    // Check if container is running
+                    sh "docker ps | grep frontend-${env.NEW_VERSION}"
+                    
+                    // Check container logs
+                    echo "📋 Container logs:"
+                    sh "docker logs frontend-${env.NEW_VERSION} | tail -20"
+                    
                     def retries = 6
                     def success = false
 
                     echo "⏳ Waiting for container startup..."
-                    sleep 10 // wait extra to let Next.js start
+                    sleep 15
 
                     for (int i = 0; i < retries; i++) {
                         def status = sh(
-                            script: "curl -s -o /dev/null -w '%{http_code}' http://localhost:${env.NEW_PORT}/api/health || echo '000'",
+                            script: "curl -v http://localhost:${env.NEW_PORT}/api/health 2>&1 | grep '< HTTP' | awk '{print \$3}' || echo '000'",
                             returnStdout: true
                         ).trim()
                         echo "Health check attempt ${i + 1}: HTTP ${status}"
@@ -122,6 +130,8 @@ pipeline {
                     }
 
                     if (!success) {
+                        echo "📋 Final container logs before cleanup:"
+                        sh "docker logs frontend-${env.NEW_VERSION}"
                         sh "docker rm -f frontend-${env.NEW_VERSION} || true"
                         error "❌ Deployment failed: new container did not respond correctly"
                     }
