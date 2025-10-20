@@ -10,8 +10,6 @@ pipeline {
         NETWORK    = "ecosystem_default"
         BLUE_PORT  = 3000
         GREEN_PORT = 3001
-        DOCKERHUB_USER = "<your_dockerhub_username>"
-        DOCKERHUB_PASS = "<your_dockerhub_password_or_token>"
         BASE_IMAGE = "node:18-alpine"
     }
 
@@ -29,8 +27,14 @@ pipeline {
         stage('Docker Login') {
             steps {
                 script {
-                    echo "🔑 Logging in to Docker Hub..."
-                    sh "echo ${DOCKERHUB_PASS} | docker login -u ${DOCKERHUB_USER} --password-stdin"
+                    echo "🔑 Logging in to Docker Hub securely..."
+
+                    // Using Jenkins Credentials (replace 'dockerhub' with your credential ID)
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKERHUB_USER', passwordVariable: 'DOCKERHUB_PASS')]) {
+                        sh """
+                            echo \$DOCKERHUB_PASS | docker login -u \$DOCKERHUB_USER --password-stdin
+                        """
+                    }
                 }
             }
         }
@@ -64,6 +68,7 @@ pipeline {
         stage('Deploy New Instance') {
             steps {
                 script {
+                    // Determine current live container via Nginx config
                     def active = sh(
                         script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
                         returnStdout: true
@@ -74,8 +79,10 @@ pipeline {
 
                     echo "🧱 Deploying new ${newVersion} container on host port ${newPort}"
 
+                    // Remove old new container if exists
                     sh "docker rm -f frontend-${newVersion} || true"
 
+                    // Run the new container
                     sh """
                         docker run -d \
                         --name frontend-${newVersion} \
@@ -141,6 +148,7 @@ pipeline {
 
                     echo "Current live: ${active}, switching to: ${newVersion}"
 
+                    // Update Nginx proxy port
                     sh """
                         sudo sed -i "s|127.0.0.1:300[0-1]|127.0.0.1:${newPort}|" /etc/nginx/sites-available/cf-frontend
                         sudo systemctl reload nginx
