@@ -115,7 +115,7 @@ pipeline {
                             script: """
                                 docker run --rm --network ${NETWORK} alpine/curl:latest \
                                 -L -s -o /dev/null -w '%{http_code}' \
-                                http://frontend-${env.NEW_VERSION}:3000/api/health || echo '000'
+                                http://frontend-${env.NEW_VERSION}:3000/cf-frontend/api/health || echo '000'
                             """,
                             returnStdout: true
                         ).trim()
