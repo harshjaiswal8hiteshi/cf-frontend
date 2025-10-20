@@ -150,31 +150,40 @@ pipeline {
         stage('Switch Traffic via Nginx') {
             steps {
                 script {
-                    def start = System.currentTimeMillis()
                     echo "🔄 Switching traffic via Nginx..."
+                    def start = System.currentTimeMillis()
 
                     def active = sh(
-                        script: "test -f /etc/nginx/sites-available/cf-frontend && grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green || echo none",
+                        script: "test -f /etc/nginx/sites-available/cf-frontend && grep -q '127.0.0.1:3000' /etc/nginx/sites-available/cf-frontend && echo blue || echo green || echo none",
                         returnStdout: true
                     ).trim()
+                    if (active == "") active = "none"
 
                     def newVersion = (active == "blue") ? "green" : "blue"
-                    def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
 
                     echo "Current live: ${active}, switching to: ${newVersion}"
 
+                    // ✅ No sudo — Jenkins runs as root
                     sh """
-                        sudo mkdir -p /etc/nginx/sites-available
-                        sudo touch /etc/nginx/sites-available/cf-frontend
-                        sudo sed -i "s|127.0.0.1:300[0-1]|127.0.0.1:${newPort}|" /etc/nginx/sites-available/cf-frontend || echo "127.0.0.1:${newPort}" | sudo tee /etc/nginx/sites-available/cf-frontend
-                        sudo systemctl reload nginx
+                        mkdir -p /etc/nginx/sites-available
+                        echo 'server {
+                            listen 80;
+                            location / {
+                                proxy_pass http://127.0.0.1:3000;
+                                proxy_set_header Host \$host;
+                                proxy_set_header X-Real-IP \$remote_addr;
+                            }
+                        }' > /etc/nginx/sites-available/cf-frontend
+
+                        nginx -t
+                        nginx -s reload
                     """
 
-                    echo "✅ Traffic switched to frontend-${newVersion} via /cf-frontend"
                     echo "🕒 Time taken for 'Switch Traffic via Nginx': ${(System.currentTimeMillis() - start)/1000}s"
                 }
             }
         }
+
 
         stage('Cleanup') {
             steps {
