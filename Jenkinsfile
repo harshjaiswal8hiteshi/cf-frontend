@@ -110,25 +110,24 @@ pipeline {
                     def success = false
 
                     def active = sh(
-                        script: "test -f /etc/nginx/sites-available/cf-frontend && grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green || echo none",
+                        script: "test -f /etc/nginx/sites-available/cf-frontend && grep -q '127.0.0.1:3000' /etc/nginx/sites-available/cf-frontend && echo blue || echo green || echo none",
                         returnStdout: true
                     ).trim()
                     if (active == "") active = "none"
 
                     def newVersion = (active == "blue") ? "green" : "blue"
-                    def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
 
-                    // Give container time to boot
                     echo "⏳ Waiting for container startup..."
                     sleep 5
 
                     for (int i = 0; i < retries; i++) {
                         def status = sh(
-                            script: "curl -s -o /dev/null -w \"%{http_code}\" http://localhost:${newPort}/api/health || echo 000",
+                            script: "docker exec frontend-${newVersion} sh -c \"apk add --no-cache curl >/dev/null 2>&1 || true; curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/health || echo 000\"",
                             returnStdout: true
                         ).trim()
 
                         echo "Health check attempt ${i + 1}: HTTP ${status}"
+
                         if (status == "200") {
                             success = true
                             echo "✅ Health check passed!"
@@ -146,6 +145,7 @@ pipeline {
                 }
             }
         }
+
 
         stage('Switch Traffic via Nginx') {
             steps {
