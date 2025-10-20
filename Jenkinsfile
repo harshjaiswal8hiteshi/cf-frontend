@@ -22,8 +22,7 @@ pipeline {
                     def now = new Date().format("yyyy-MM-dd HH:mm:ss")
                     echo "✅ New commit received from GitHub at ${now}"
                     sh "echo '✅ Commit received at ${now}' >> /var/jenkins_home/github_commit_log.txt"
-                    def duration = (System.currentTimeMillis() - start) / 1000
-                    echo "🕒 Time taken for 'Log Commit': ${duration}s"
+                    echo "🕒 Time taken for 'Log Commit': ${(System.currentTimeMillis() - start)/1000}s"
                 }
             }
         }
@@ -34,12 +33,9 @@ pipeline {
                     def start = System.currentTimeMillis()
                     echo "🔑 Logging in to Docker Hub..."
                     withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKERHUB_USER', passwordVariable: 'DOCKERHUB_PASS')]) {
-                        sh """
-                            echo \$DOCKERHUB_PASS | docker login -u \$DOCKERHUB_USER --password-stdin
-                        """
+                        sh "echo \$DOCKERHUB_PASS | docker login -u \$DOCKERHUB_USER --password-stdin"
                     }
-                    def duration = (System.currentTimeMillis() - start) / 1000
-                    echo "🕒 Time taken for 'Docker Login': ${duration}s"
+                    echo "🕒 Time taken for 'Docker Login': ${(System.currentTimeMillis() - start)/1000}s"
                 }
             }
         }
@@ -56,8 +52,7 @@ pipeline {
                     } else {
                         echo "✅ Base image already cached locally."
                     }
-                    def duration = (System.currentTimeMillis() - start) / 1000
-                    echo "🕒 Time taken for 'Ensure Base Image': ${duration}s"
+                    echo "🕒 Time taken for 'Ensure Base Image': ${(System.currentTimeMillis() - start)/1000}s"
                 }
             }
         }
@@ -68,8 +63,7 @@ pipeline {
                     def start = System.currentTimeMillis()
                     echo "🚀 Building Docker image..."
                     sh "docker build -t ${IMAGE_TAG} ."
-                    def duration = (System.currentTimeMillis() - start) / 1000
-                    echo "🕒 Time taken for 'Build Docker Image': ${duration}s"
+                    echo "🕒 Time taken for 'Build Docker Image': ${(System.currentTimeMillis() - start)/1000}s"
                 }
             }
         }
@@ -79,11 +73,13 @@ pipeline {
                 script {
                     def start = System.currentTimeMillis()
 
-                    // Determine which version is active
+                    // Determine which version is active; handle first run
                     def active = sh(
-                        script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
+                        script: "test -f /etc/nginx/sites-available/cf-frontend && grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green || echo none",
                         returnStdout: true
                     ).trim()
+
+                    if (active == "") active = "none"
 
                     def newVersion = (active == "blue") ? "green" : "blue"
                     def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
@@ -99,8 +95,7 @@ pipeline {
                         ${IMAGE_TAG}
                     """
 
-                    def duration = (System.currentTimeMillis() - start) / 1000
-                    echo "🕒 Time taken for 'Deploy New Instance': ${duration}s"
+                    echo "🕒 Time taken for 'Deploy New Instance': ${(System.currentTimeMillis() - start)/1000}s"
                 }
             }
         }
@@ -111,42 +106,43 @@ pipeline {
                     def start = System.currentTimeMillis()
                     echo "🩺 Checking health of new instance..."
 
-                    def retries = 5
+                    def retries = 6
                     def success = false
 
                     def active = sh(
-                        script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
+                        script: "test -f /etc/nginx/sites-available/cf-frontend && grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green || echo none",
                         returnStdout: true
                     ).trim()
-                    def newVersion = (active == "blue") ? "green" : "blue"
-                    def containerName = "frontend-${newVersion}"
+                    if (active == "") active = "none"
 
-                    // Wait briefly for app startup
+                    def newVersion = (active == "blue") ? "green" : "blue"
+                    def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
+
+                    // Give container time to boot
+                    echo "⏳ Waiting for container startup..."
                     sleep 5
 
                     for (int i = 0; i < retries; i++) {
                         def status = sh(
-                            script: "docker exec ${containerName} sh -c 'curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/api/health || echo 000'",
+                            script: "curl -s -o /dev/null -w \"%{http_code}\" http://localhost:${newPort}/api/health || echo 000",
                             returnStdout: true
                         ).trim()
 
                         echo "Health check attempt ${i + 1}: HTTP ${status}"
-
                         if (status == "200") {
-                            echo "✅ Health check passed!"
                             success = true
+                            echo "✅ Health check passed!"
                             break
                         }
                         sleep 5
                     }
 
                     if (!success) {
-                        sh "docker rm -f ${containerName} || true"
+                        sh "docker rm -f frontend-${newVersion} || true"
                         error "❌ Deployment failed: new container did not respond correctly"
                     }
 
-                    def duration = (System.currentTimeMillis() - start) / 1000
-                    echo "🕒 Time taken for 'Health Check': ${duration}s"
+                    echo "🕒 Time taken for 'Health Check': ${(System.currentTimeMillis() - start)/1000}s"
                 }
             }
         }
@@ -158,23 +154,24 @@ pipeline {
                     echo "🔄 Switching traffic via Nginx..."
 
                     def active = sh(
-                        script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
+                        script: "test -f /etc/nginx/sites-available/cf-frontend && grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green || echo none",
                         returnStdout: true
                     ).trim()
+
                     def newVersion = (active == "blue") ? "green" : "blue"
                     def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
 
                     echo "Current live: ${active}, switching to: ${newVersion}"
 
                     sh """
-                        sudo sed -i "s|127.0.0.1:300[0-1]|127.0.0.1:${newPort}|" /etc/nginx/sites-available/cf-frontend
+                        sudo mkdir -p /etc/nginx/sites-available
+                        sudo touch /etc/nginx/sites-available/cf-frontend
+                        sudo sed -i "s|127.0.0.1:300[0-1]|127.0.0.1:${newPort}|" /etc/nginx/sites-available/cf-frontend || echo "127.0.0.1:${newPort}" | sudo tee /etc/nginx/sites-available/cf-frontend
                         sudo systemctl reload nginx
                     """
 
                     echo "✅ Traffic switched to frontend-${newVersion} via /cf-frontend"
-
-                    def duration = (System.currentTimeMillis() - start) / 1000
-                    echo "🕒 Time taken for 'Switch Traffic via Nginx': ${duration}s"
+                    echo "🕒 Time taken for 'Switch Traffic via Nginx': ${(System.currentTimeMillis() - start)/1000}s"
                 }
             }
         }
@@ -185,16 +182,16 @@ pipeline {
                     def start = System.currentTimeMillis()
 
                     def active = sh(
-                        script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
+                        script: "test -f /etc/nginx/sites-available/cf-frontend && grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green || echo none",
                         returnStdout: true
                     ).trim()
+
                     def oldVersion = (active == "blue") ? "green" : "blue"
 
                     echo "🧹 Removing old container: frontend-${oldVersion}"
                     sh "docker rm -f frontend-${oldVersion} || true"
 
-                    def duration = (System.currentTimeMillis() - start) / 1000
-                    echo "🕒 Time taken for 'Cleanup': ${duration}s"
+                    echo "🕒 Time taken for 'Cleanup': ${(System.currentTimeMillis() - start)/1000}s"
                 }
             }
         }
