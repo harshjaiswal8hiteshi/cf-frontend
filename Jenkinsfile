@@ -24,6 +24,21 @@ pipeline {
             }
         }
 
+        stage('Docker Login') {
+            steps {
+                script {
+                    echo "🔑 Logging in to Docker Hub..."
+
+                    // Replace 'dockerhub' with your Jenkins credentials ID
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKERHUB_USER', passwordVariable: 'DOCKERHUB_PASS')]) {
+                        sh """
+                            echo \$DOCKERHUB_PASS | docker login -u \$DOCKERHUB_USER --password-stdin
+                        """
+                    }
+                }
+            }
+        }
+
         stage('Ensure Base Image') {
             steps {
                 script {
@@ -34,10 +49,10 @@ pipeline {
                     ).trim()
 
                     if (!imageExists) {
-                        echo "🛠 Base image missing, pulling ${BASE_IMAGE} anonymously..."
+                        echo "🛠 Base image missing, pulling ${BASE_IMAGE}..."
                         sh "docker pull ${BASE_IMAGE}"
                     } else {
-                        echo "✅ Base image already cached locally, no need to pull."
+                        echo "✅ Base image already cached locally."
                     }
                 }
             }
