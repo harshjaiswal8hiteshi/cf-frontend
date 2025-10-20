@@ -5,11 +5,14 @@ pipeline {
     }
 
     environment {
-        APP_NAME = "frontend"
-        IMAGE_TAG = "ecosystem-frontend:latest"
-        NETWORK   = "ecosystem_default"
-        BLUE_PORT = 3000
+        APP_NAME   = "frontend"
+        IMAGE_TAG  = "ecosystem-frontend:latest"
+        NETWORK    = "ecosystem_default"
+        BLUE_PORT  = 3000
         GREEN_PORT = 3001
+        DOCKERHUB_USER = "<your_dockerhub_username>"
+        DOCKERHUB_PASS = "<your_dockerhub_password_or_token>"
+        BASE_IMAGE = "node:18-alpine"
     }
 
     stages {
@@ -19,6 +22,34 @@ pipeline {
                     def now = new Date().format("yyyy-MM-dd HH:mm:ss")
                     echo "✅ New commit received from GitHub at ${now}"
                     sh "echo '✅ Commit received at ${now}' >> /var/jenkins_home/github_commit_log.txt"
+                }
+            }
+        }
+
+        stage('Docker Login') {
+            steps {
+                script {
+                    echo "🔑 Logging in to Docker Hub..."
+                    sh "echo ${DOCKERHUB_PASS} | docker login -u ${DOCKERHUB_USER} --password-stdin"
+                }
+            }
+        }
+
+        stage('Ensure Base Image') {
+            steps {
+                script {
+                    echo "📦 Checking if base image ${BASE_IMAGE} exists..."
+                    def imageExists = sh(
+                        script: "docker images -q ${BASE_IMAGE} || true",
+                        returnStdout: true
+                    ).trim()
+
+                    if (!imageExists) {
+                        echo "🛠 Base image missing, pulling ${BASE_IMAGE}..."
+                        sh "docker pull ${BASE_IMAGE}"
+                    } else {
+                        echo "✅ Base image already present, using cached version."
+                    }
                 }
             }
         }
@@ -33,7 +64,6 @@ pipeline {
         stage('Deploy New Instance') {
             steps {
                 script {
-                    // Determine current live container via Nginx config
                     def active = sh(
                         script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
                         returnStdout: true
@@ -44,10 +74,8 @@ pipeline {
 
                     echo "🧱 Deploying new ${newVersion} container on host port ${newPort}"
 
-                    // Remove old new container if exists
                     sh "docker rm -f frontend-${newVersion} || true"
 
-                    // Run the new container
                     sh """
                         docker run -d \
                         --name frontend-${newVersion} \
@@ -66,7 +94,6 @@ pipeline {
                     def retries = 5
                     def success = false
 
-                    // Determine new container port
                     def active = sh(
                         script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
                         returnStdout: true
@@ -114,7 +141,6 @@ pipeline {
 
                     echo "Current live: ${active}, switching to: ${newVersion}"
 
-                    // Update Nginx proxy port
                     sh """
                         sudo sed -i "s|127.0.0.1:300[0-1]|127.0.0.1:${newPort}|" /etc/nginx/sites-available/cf-frontend
                         sudo systemctl reload nginx
@@ -128,7 +154,6 @@ pipeline {
         stage('Cleanup') {
             steps {
                 script {
-                    // Remove old container (not serving traffic anymore)
                     def oldVersion = (active == "blue") ? "blue" : "green"
                     echo "🧹 Removing old container: frontend-${oldVersion}"
                     sh "docker rm -f frontend-${oldVersion} || true"
