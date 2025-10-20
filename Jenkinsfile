@@ -22,6 +22,7 @@ pipeline {
                     sh "echo '✅ Commit received at ${now}' >> /var/jenkins_home/github_commit_log.txt"
                 }
             }
+            
         }
 
         stage('Docker Login') {
