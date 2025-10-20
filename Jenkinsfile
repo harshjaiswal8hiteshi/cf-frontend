@@ -4,6 +4,7 @@ pipeline {
         githubPush()
     }
 
+ 
     environment {
         APP_NAME   = "frontend"
         IMAGE_TAG  = "ecosystem-frontend:latest"
