@@ -14,28 +14,34 @@ pipeline {
     }
 
     stages {
+
         stage('Log Commit') {
             steps {
                 script {
+                    def start = System.currentTimeMillis()
                     def now = new Date().format("yyyy-MM-dd HH:mm:ss")
                     echo "✅ New commit received from GitHub at ${now}"
                     sh "echo '✅ Commit received at ${now}' >> /var/jenkins_home/github_commit_log.txt"
+                    def end = System.currentTimeMillis()
+                    def duration = (end - start) / 1000
+                    echo "🕒 Time taken for 'Log Commit': ${duration}s"
                 }
             }
-            
         }
 
         stage('Docker Login') {
             steps {
                 script {
+                    def start = System.currentTimeMillis()
                     echo "🔑 Logging in to Docker Hub..."
-
-                    // Replace 'dockerhub' with your Jenkins credentials ID
                     withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKERHUB_USER', passwordVariable: 'DOCKERHUB_PASS')]) {
                         sh """
                             echo \$DOCKERHUB_PASS | docker login -u \$DOCKERHUB_USER --password-stdin
                         """
                     }
+                    def end = System.currentTimeMillis()
+                    def duration = (end - start) / 1000
+                    echo "🕒 Time taken for 'Docker Login': ${duration}s"
                 }
             }
         }
@@ -43,6 +49,7 @@ pipeline {
         stage('Ensure Base Image') {
             steps {
                 script {
+                    def start = System.currentTimeMillis()
                     echo "📦 Checking if base image ${BASE_IMAGE} exists locally..."
                     def imageExists = sh(
                         script: "docker images -q ${BASE_IMAGE} || true",
@@ -55,20 +62,31 @@ pipeline {
                     } else {
                         echo "✅ Base image already cached locally."
                     }
+
+                    def end = System.currentTimeMillis()
+                    def duration = (end - start) / 1000
+                    echo "🕒 Time taken for 'Ensure Base Image': ${duration}s"
                 }
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                echo "🚀 Building Docker image..."
-                sh "docker build -t ${IMAGE_TAG} ."
+                script {
+                    def start = System.currentTimeMillis()
+                    echo "🚀 Building Docker image..."
+                    sh "docker build -t ${IMAGE_TAG} ."
+                    def end = System.currentTimeMillis()
+                    def duration = (end - start) / 1000
+                    echo "🕒 Time taken for 'Build Docker Image': ${duration}s"
+                }
             }
         }
 
         stage('Deploy New Instance') {
             steps {
                 script {
+                    def start = System.currentTimeMillis()
                     def active = sh(
                         script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
                         returnStdout: true
@@ -87,6 +105,9 @@ pipeline {
                         -p ${newPort}:3000 \
                         ${IMAGE_TAG}
                     """
+                    def end = System.currentTimeMillis()
+                    def duration = (end - start) / 1000
+                    echo "🕒 Time taken for 'Deploy New Instance': ${duration}s"
                 }
             }
         }
@@ -94,6 +115,7 @@ pipeline {
         stage('Health Check') {
             steps {
                 script {
+                    def start = System.currentTimeMillis()
                     echo "🩺 Checking health of new instance..."
                     def retries = 5
                     def success = false
@@ -126,6 +148,10 @@ pipeline {
                         sh "docker rm -f frontend-${newVersion} || true"
                         error "❌ Deployment failed: new container did not respond correctly"
                     }
+
+                    def end = System.currentTimeMillis()
+                    def duration = (end - start) / 1000
+                    echo "🕒 Time taken for 'Health Check': ${duration}s"
                 }
             }
         }
@@ -133,6 +159,7 @@ pipeline {
         stage('Switch Traffic via Nginx') {
             steps {
                 script {
+                    def start = System.currentTimeMillis()
                     echo "🔄 Switching traffic via Nginx..."
 
                     def active = sh(
@@ -151,6 +178,10 @@ pipeline {
                     """
 
                     echo "✅ Traffic switched to frontend-${newVersion} via /cf-frontend"
+
+                    def end = System.currentTimeMillis()
+                    def duration = (end - start) / 1000
+                    echo "🕒 Time taken for 'Switch Traffic via Nginx': ${duration}s"
                 }
             }
         }
@@ -158,9 +189,17 @@ pipeline {
         stage('Cleanup') {
             steps {
                 script {
+                    def start = System.currentTimeMillis()
+                    def active = sh(
+                        script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
+                        returnStdout: true
+                    ).trim()
                     def oldVersion = (active == "blue") ? "blue" : "green"
                     echo "🧹 Removing old container: frontend-${oldVersion}"
                     sh "docker rm -f frontend-${oldVersion} || true"
+                    def end = System.currentTimeMillis()
+                    def duration = (end - start) / 1000
+                    echo "🕒 Time taken for 'Cleanup': ${duration}s"
                 }
             }
         }
