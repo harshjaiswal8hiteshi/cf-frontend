@@ -1,14 +1,15 @@
 pipeline {
     agent any
-    triggers { githubPush() }
+    triggers {
+        githubPush()
+    }
 
     environment {
         APP_NAME = "frontend"
-        HOST_PORT = 3000
         IMAGE_TAG = "ecosystem-frontend:latest"
         NETWORK   = "ecosystem_default"
-        NEXT_PUBLIC_APP_BACKEND_URL = "http://localhost:8000"
-        NEXT_PUBLIC_AI_BACKEND_URL  = "http://localhost:8082"
+        BLUE_PORT = 3000
+        GREEN_PORT = 3001
     }
 
     stages {
@@ -17,49 +18,43 @@ pipeline {
                 script {
                     def now = new Date().format("yyyy-MM-dd HH:mm:ss")
                     echo "✅ New commit received from GitHub at ${now}"
-                    sh 'echo "✅ Commit received at ${now}" >> /var/jenkins_home/github_commit_log.txt'
-                }
-            }
-        }
-
-        stage('Prepare .env') {
-            steps {
-                script {
-                    echo "📄 Creating .env file at project root..."
-                    writeFile file: '.env', text: """
-                        NEXT_PUBLIC_APP_BACKEND_URL=${env.NEXT_PUBLIC_APP_BACKEND_URL}
-                        NEXT_PUBLIC_AI_BACKEND_URL=${env.NEXT_PUBLIC_AI_BACKEND_URL}
-                    """
+                    sh "echo '✅ Commit received at ${now}' >> /var/jenkins_home/github_commit_log.txt"
                 }
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                timeout(time: 10, unit: 'MINUTES') {
-                    echo "🚀 Building Docker image..."
-                    sh """
-                        docker build \
-                            --network=host \
-                            --progress=plain \
-                            --no-cache \
-                            -t ${IMAGE_TAG} .
-                    """
-                }
+                echo "🚀 Building Docker image..."
+                sh "docker build -t ${IMAGE_TAG} ."
             }
         }
 
-        stage('Deploy New Instance for Health Check') {
+        stage('Deploy New Instance') {
             steps {
                 script {
-                    echo "🧱 Running new container for health check..."
-                    // Remove any temp container
-                    sh "docker rm -f ${APP_NAME}-temp || true"
+                    // Determine current live container via Nginx config
+                    def active = sh(
+                        script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
+                        returnStdout: true
+                    ).trim()
 
-                    // Run container on the same Docker network (no port mapping needed for internal access)
-                    sh "docker run -d --name ${APP_NAME}-temp --network ${NETWORK} ${IMAGE_TAG}"
+                    def newVersion = (active == "blue") ? "green" : "blue"
+                    def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
 
-                    echo "🧪 Temp container running, accessible via Docker network at ${APP_NAME}-temp:3000"
+                    echo "🧱 Deploying new ${newVersion} container on host port ${newPort}"
+
+                    // Remove old new container if exists
+                    sh "docker rm -f frontend-${newVersion} || true"
+
+                    // Run the new container
+                    sh """
+                        docker run -d \
+                        --name frontend-${newVersion} \
+                        --network ${NETWORK} \
+                        -p ${newPort}:3000 \
+                        ${IMAGE_TAG}
+                    """
                 }
             }
         }
@@ -68,16 +63,20 @@ pipeline {
             steps {
                 script {
                     echo "🩺 Checking health of new instance..."
-                    def retries = 10
+                    def retries = 5
                     def success = false
 
-                    // Wait a bit for container to start
-                    sleep 3
+                    // Determine new container port
+                    def active = sh(
+                        script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
+                        returnStdout: true
+                    ).trim()
+                    def newVersion = (active == "blue") ? "green" : "blue"
+                    def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
 
                     for (int i = 0; i < retries; i++) {
-                        // Access container directly via Docker network DNS
                         def status = sh(
-                            script: "curl -s -o /dev/null -w '%{http_code}' http://${APP_NAME}-temp:3000/api/health || echo '000'",
+                            script: "curl -s -o /dev/null -w \"%{http_code}\" http://localhost:${newPort}/api/health || echo '000'",
                             returnStdout: true
                         ).trim()
 
@@ -93,52 +92,48 @@ pipeline {
                     }
 
                     if (!success) {
-                        echo "❌ Health check failed. Checking container logs..."
-                        sh "docker logs ${APP_NAME}-temp || true"
-                        sh "docker rm -f ${APP_NAME}-temp || true"
+                        sh "docker rm -f frontend-${newVersion} || true"
                         error "❌ Deployment failed: new container did not respond correctly"
                     }
                 }
             }
         }
 
-        stage('Switch Traffic to Host Port 3000') {
+        stage('Switch Traffic via Nginx') {
             steps {
                 script {
-                    echo "🔄 Switching traffic to new container..."
-                    
-                    // Stop and remove temp container
-                    sh "docker stop ${APP_NAME}-temp || true"
-                    sh "docker rm ${APP_NAME}-temp || true"
-                    
-                    // Stop old live container if exists
-                    sh "docker stop ${APP_NAME}-live || true"
-                    sh "docker rm ${APP_NAME}-live || true"
+                    echo "🔄 Switching traffic via Nginx..."
 
-                    // Start new container on fixed HOST_PORT (3000)
-                    sh "docker run -d --name ${APP_NAME}-live --network ${NETWORK} -p ${HOST_PORT}:3000 ${IMAGE_TAG}"
-                    
-                    echo "✅ Traffic switched: host port ${HOST_PORT} points to new live container"
+                    def active = sh(
+                        script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
+                        returnStdout: true
+                    ).trim()
+
+                    def newVersion = (active == "blue") ? "green" : "blue"
+                    def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
+
+                    echo "Current live: ${active}, switching to: ${newVersion}"
+
+                    // Update Nginx proxy port
+                    sh """
+                        sudo sed -i "s|127.0.0.1:300[0-1]|127.0.0.1:${newPort}|" /etc/nginx/sites-available/cf-frontend
+                        sudo systemctl reload nginx
+                    """
+
+                    echo "✅ Traffic switched to frontend-${newVersion} via /cf-frontend"
                 }
             }
         }
 
         stage('Cleanup') {
             steps {
-                echo "🧹 Deployment complete. Cleaning up old images..."
-                sh "docker image prune -f"
+                script {
+                    // Remove old container (not serving traffic anymore)
+                    def oldVersion = (active == "blue") ? "blue" : "green"
+                    echo "🧹 Removing old container: frontend-${oldVersion}"
+                    sh "docker rm -f frontend-${oldVersion} || true"
+                }
             }
-        }
-    }
-
-    post {
-        failure {
-            echo "❌ Deployment failed. Cleaning up..."
-            sh "docker rm -f ${APP_NAME}-temp || true"
-            echo "Live container remains running if any."
-        }
-        success {
-            echo "🎉 Deployment successful!"
         }
     }
 }
