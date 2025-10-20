@@ -24,35 +24,20 @@ pipeline {
             }
         }
 
-        stage('Docker Login') {
-            steps {
-                script {
-                    echo "🔑 Logging in to Docker Hub securely..."
-
-                    // Using Jenkins Credentials (replace 'dockerhub' with your credential ID)
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKERHUB_USER', passwordVariable: 'DOCKERHUB_PASS')]) {
-                        sh """
-                            echo \$DOCKERHUB_PASS | docker login -u \$DOCKERHUB_USER --password-stdin
-                        """
-                    }
-                }
-            }
-        }
-
         stage('Ensure Base Image') {
             steps {
                 script {
-                    echo "📦 Checking if base image ${BASE_IMAGE} exists..."
+                    echo "📦 Checking if base image ${BASE_IMAGE} exists locally..."
                     def imageExists = sh(
                         script: "docker images -q ${BASE_IMAGE} || true",
                         returnStdout: true
                     ).trim()
 
                     if (!imageExists) {
-                        echo "🛠 Base image missing, pulling ${BASE_IMAGE}..."
+                        echo "🛠 Base image missing, pulling ${BASE_IMAGE} anonymously..."
                         sh "docker pull ${BASE_IMAGE}"
                     } else {
-                        echo "✅ Base image already present, using cached version."
+                        echo "✅ Base image already cached locally, no need to pull."
                     }
                 }
             }
@@ -68,7 +53,6 @@ pipeline {
         stage('Deploy New Instance') {
             steps {
                 script {
-                    // Determine current live container via Nginx config
                     def active = sh(
                         script: "grep -q '127.0.0.1:${BLUE_PORT}' /etc/nginx/sites-available/cf-frontend && echo blue || echo green",
                         returnStdout: true
@@ -78,11 +62,8 @@ pipeline {
                     def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
 
                     echo "🧱 Deploying new ${newVersion} container on host port ${newPort}"
-
-                    // Remove old new container if exists
                     sh "docker rm -f frontend-${newVersion} || true"
 
-                    // Run the new container
                     sh """
                         docker run -d \
                         --name frontend-${newVersion} \
@@ -148,7 +129,6 @@ pipeline {
 
                     echo "Current live: ${active}, switching to: ${newVersion}"
 
-                    // Update Nginx proxy port
                     sh """
                         sudo sed -i "s|127.0.0.1:300[0-1]|127.0.0.1:${newPort}|" /etc/nginx/sites-available/cf-frontend
                         sudo systemctl reload nginx
