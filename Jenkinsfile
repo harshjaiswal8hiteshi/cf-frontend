@@ -4,8 +4,6 @@ pipeline {
         githubPush()
     }
 
- 
- 
     environment {
         APP_NAME   = "frontend"
         IMAGE_TAG  = "ecosystem-frontend:latest"
@@ -13,9 +11,12 @@ pipeline {
         BLUE_PORT  = 3000
         GREEN_PORT = 3001
         BASE_IMAGE = "node:18-alpine"
+        NGINX_IMAGE = "nginx:1.27-alpine"
+        CURL_IMAGE = "alpine/curl:latest"
     }
 
     stages {
+
         stage('Log Commit') {
             steps {
                 script {
@@ -41,16 +42,61 @@ pipeline {
         stage('Ensure Base Image') {
             steps {
                 script {
-                    def imageExists = sh(
-                        script: "docker images -q ${BASE_IMAGE} || true",
-                        returnStdout: true
-                    ).trim()
-
+                    def imageExists = sh(script: "docker images -q ${BASE_IMAGE} || true", returnStdout: true).trim()
                     if (!imageExists) {
-                        echo "📦 Pulling base image ${BASE_IMAGE}..."
+                        echo "📦 Pulling Node base image..."
                         sh "docker pull ${BASE_IMAGE}"
                     } else {
-                        echo "✅ Base image ${BASE_IMAGE} already exists."
+                        echo "✅ Node base image already exists."
+                    }
+                }
+            }
+        }
+
+        stage('Ensure Nginx Image') {
+            steps {
+                script {
+                    def exists = sh(script: "docker images -q ${NGINX_IMAGE} || true", returnStdout: true).trim()
+                    if (!exists) {
+                        echo "📦 Pulling Nginx image..."
+                        sh "docker pull ${NGINX_IMAGE}"
+                    } else {
+                        echo "✅ Nginx image already exists."
+                    }
+                }
+            }
+        }
+
+        stage('Ensure Curl Image') {
+            steps {
+                script {
+                    def exists = sh(script: "docker images -q ${CURL_IMAGE} || true", returnStdout: true).trim()
+                    if (!exists) {
+                        echo "📦 Pulling curl image..."
+                        sh "docker pull ${CURL_IMAGE}"
+                    } else {
+                        echo "✅ Curl image already exists."
+                    }
+                }
+            }
+        }
+
+        stage('Ensure Nginx Container') {
+            steps {
+                script {
+                    def nginxExists = sh(script: "docker ps --format '{{.Names}}' | grep nginx-proxy || true", returnStdout: true).trim()
+                    if (!nginxExists) {
+                        echo "🚀 Starting Nginx proxy container..."
+                        sh """
+                            docker run -d \
+                            --name nginx-proxy \
+                            --network ${NETWORK} \
+                            -p 80:80 \
+                            -v /etc/nginx/conf.d:/etc/nginx/conf.d \
+                            ${NGINX_IMAGE}
+                        """
+                    } else {
+                        echo "✅ Nginx proxy container already running."
                     }
                 }
             }
@@ -68,19 +114,16 @@ pipeline {
         stage('Deploy New Instance') {
             steps {
                 script {
-                    // Determine active color
-                    def activeContainer = sh(
-                        script: "docker ps --format '{{.Names}}' | grep frontend-blue || true",
-                        returnStdout: true
-                    ).trim()
+                    // Determine current active container
+                    def activeContainer = sh(script: "docker ps --format '{{.Names}}' | grep frontend-blue || true", returnStdout: true).trim()
 
-                    // Decide new version and port
+                    // Decide new version
                     def newVersion = (activeContainer == "frontend-blue") ? "green" : "blue"
                     def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
 
                     echo "🧱 Deploying new ${newVersion} container on port ${newPort}"
 
-                    // Remove old container if exists
+                    // Remove old container of same color if exists
                     sh "docker rm -f frontend-${newVersion} || true"
 
                     // Run new container
@@ -92,7 +135,6 @@ pipeline {
                         ${IMAGE_TAG}
                     """
 
-                    // Save for next stages
                     env.NEW_VERSION = newVersion
                     env.NEW_PORT = newPort.toString()
                 }
@@ -102,8 +144,7 @@ pipeline {
         stage('Health Check') {
             steps {
                 script {
-                    echo "🩺 Checking health of new instance: frontend-${env.NEW_VERSION}..."
-                    echo "📍 Container: frontend-${env.NEW_VERSION}, Internal port: 3000, External port: ${env.NEW_PORT}"
+                    echo "🩺 Checking health of frontend-${env.NEW_VERSION}..."
                     
                     def retries = 10
                     def success = false
@@ -112,24 +153,20 @@ pipeline {
                     sleep 15
 
                     for (int i = 0; i < retries; i++) {
-                        // Follow redirects with -L flag and accept both 200 and 308 as valid
                         def status = sh(
                             script: """
-                                docker run --rm --network ${NETWORK} alpine/curl:latest \
+                                docker run --rm --network ${NETWORK} ${CURL_IMAGE} \
                                 -L -s -o /dev/null -w '%{http_code}' \
                                 http://frontend-${env.NEW_VERSION}:3000/cf-frontend/api/health || echo '000'
                             """,
                             returnStdout: true
                         ).trim()
-                        
+
                         echo "Health check attempt ${i + 1}: HTTP ${status}"
-                        
-                        // Accept 200 (OK), 308 (Permanent Redirect), or 301/302 as success
-                        // The app is running if it responds with these codes
-                        if (status == "200" || status == "308" || status == "301" || status == "302") {
+
+                        if (status == "200" || status == "301" || status == "302" || status == "308") {
                             success = true
-                            echo "✅ Health check passed! (HTTP ${status})"
-                            echo "🌐 Service accessible externally at: http://host:${env.NEW_PORT}"
+                            echo "✅ Health check passed! HTTP ${status}"
                             break
                         }
                         sleep 5
@@ -146,7 +183,43 @@ pipeline {
                 }
             }
         }
-        
+
+        stage('Switch Traffic') {
+            steps {
+                script {
+                    def activeBackend = (env.NEW_VERSION == "blue") ? "frontend-blue:3000" : "frontend-green:3000"
+                    echo "🔁 Switching Nginx to route traffic to ${activeBackend}..."
+
+                    sh "sudo mkdir -p /etc/nginx/conf.d"
+
+                    sh """
+                        echo "server ${activeBackend};" | sudo tee /etc/nginx/conf.d/active_upstream.conf
+                        docker exec nginx-proxy nginx -s reload
+                    """
+
+                    echo "✅ Nginx now routes all traffic to ${activeBackend}"
+                }
+            }
+        }
+
+        stage('Verify Traffic Switch') {
+            steps {
+                script {
+                    echo "🌐 Verifying Nginx routing..."
+                    def status = sh(
+                        script: "docker run --rm --network ${NETWORK} ${CURL_IMAGE} -s -o /dev/null -w '%{http_code}' http://localhost/cf-frontend/api/health",
+                        returnStdout: true
+                    ).trim()
+
+                    if (status != "200") {
+                        error "❌ Nginx verification failed (HTTP ${status})"
+                    } else {
+                        echo "✅ Verified Nginx routes correctly to ${env.NEW_VERSION}"
+                    }
+                }
+            }
+        }
+
         stage('Cleanup Old Container') {
             steps {
                 script {
