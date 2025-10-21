@@ -190,12 +190,15 @@ pipeline {
         stage('Switch Traffic') {
             steps {
                 script {
-                    def activeBackend = (env.NEW_VERSION == "blue") ? "frontend-blue:3000" : "frontend-green:3000"
+                    def activeBackend = (env.NEW_VERSION == "blue") ? "frontend-blue" : "frontend-green"
                     echo "🔁 Switching Nginx to route traffic to ${activeBackend}..."
 
-                    // Write active upstream inside Jenkins workspace (no sudo)
+                    // Copy template and replace placeholder
                     sh """
-                        echo "server ${activeBackend};" > ${env.WORKSPACE}/nginx_conf/active_upstream.conf
+                        cp ${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf.template \
+                        ${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf
+                        sed -i "s/__FRONTEND_CONTAINER__/${activeBackend}/g" \
+                        ${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf
                         docker exec nginx-proxy nginx -s reload
                     """
 
@@ -203,6 +206,7 @@ pipeline {
                 }
             }
         }
+
 
         stage('Verify Traffic Switch') {
             steps {
