@@ -209,26 +209,11 @@ pipeline {
                 script {
                     echo "🌐 Verifying Nginx routing..."
 
-                    // Run curl with verbose output to debug
-                    def status = sh(
-                        script: """
-                            echo "🚨 Debugging curl to Nginx..."
-                            echo "Listing running containers:"
-                            docker ps
-                            echo "Inspecting Nginx container:"
-                            docker inspect nginx-proxy
-                            echo "Attempting curl:"
-                            docker run --rm --network host alpine/curl:latest -v http://localhost/cf-frontend/api/health || true
-                        """,
-                        returnStdout: true
-                    ).trim()
-
-                    echo "🔍 Curl output:\n${status}"
-
-                    // Extract HTTP status code
+                    // Run curl inside the Docker network
                     def httpCode = sh(
                         script: """
-                            docker run --rm --network host alpine/curl:latest -s -o /dev/null -w '%{http_code}' http://localhost/cf-frontend/api/health
+                            docker run --rm --network ecosystem_default alpine/curl:latest \
+                            -s -o /dev/null -w '%{http_code}' http://nginx-proxy/cf-frontend/api/health
                         """,
                         returnStdout: true
                     ).trim()
@@ -243,6 +228,7 @@ pipeline {
                 }
             }
         }
+
 
         stage('Cleanup Old Container') {
             steps {
