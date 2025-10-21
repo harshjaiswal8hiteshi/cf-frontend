@@ -210,9 +210,9 @@ pipeline {
                     echo "🌐 Verifying Nginx routing..."
                     def status = sh(
                         script: """
-                            docker run --rm --network ${NETWORK} ${CURL_IMAGE} \
+                            docker run --rm --network host alpine/curl:latest \
                             -s -o /dev/null -w '%{http_code}' \
-                            http://nginx-proxy/cf-frontend/api/health
+                            http://localhost/cf-frontend/api/health
                         """,
                         returnStdout: true
                     ).trim()
@@ -225,6 +225,7 @@ pipeline {
                 }
             }
         }
+
 
 
         stage('Cleanup Old Container') {
