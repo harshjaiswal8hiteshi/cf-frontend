@@ -284,6 +284,27 @@ pipeline {
             }
         }
 
+        stage('Verify Nginx Config File') {
+            steps {
+                script {
+                    def confFile = "${env.WORKSPACE}/nginx_conf/active_upstream.conf"
+
+                    echo "🔍 Checking if Nginx config exists: ${confFile}"
+
+                    def exists = sh(
+                        script: "[ -f \"${confFile}\" ] && echo 'yes' || echo 'no'",
+                        returnStdout: true
+                    ).trim()
+
+                    if (exists != 'yes') {
+                        error "❌ Nginx config file not found: ${confFile}. Deployment cannot proceed."
+                    } else {
+                        echo "✅ Nginx config file exists."
+                    }
+                }
+            }
+        }
+
         stage('Cleanup Old Container') {
             steps {
                 script {
