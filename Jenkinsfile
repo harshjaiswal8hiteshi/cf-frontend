@@ -193,12 +193,37 @@ pipeline {
                     def activeBackend = (env.NEW_VERSION == "blue") ? "frontend-blue" : "frontend-green"
                     echo "🔁 Switching Nginx to route traffic to ${activeBackend}..."
 
+                    // Debug: show workspace
+                    sh "echo WORKSPACE=${env.WORKSPACE}"
+
                     // Copy template and replace placeholder
                     sh """
+                        # Debug: list files before copy
+                        echo "🔍 Files in nginx_conf before copy:"
+                        ls -l "${env.WORKSPACE}/deployment/nginx_conf"
+
                         cp "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf.template" \
                         "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf"
+
+                        # Debug: list files after copy
+                        echo "🔍 Files in nginx_conf after copy:"
+                        ls -l "${env.WORKSPACE}/deployment/nginx_conf"
+
+                        # Debug: show file content before sed
+                        echo "🔍 active_upstream.conf content before sed:"
+                        cat "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf"
+
                         sed -i "s|__FRONTEND_CONTAINER__|${activeBackend}|g" \
-                        "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf"
+                            "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf"
+
+                        # Debug: show file content after sed
+                        echo "🔍 active_upstream.conf content after sed:"
+                        cat "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf"
+
+                        # Debug: test nginx config inside container
+                        docker exec nginx-proxy nginx -t
+
+                        # Reload nginx
                         docker exec nginx-proxy nginx -s reload
                     """
 
@@ -206,6 +231,7 @@ pipeline {
                 }
             }
         }
+
 
 
         stage('Verify Traffic Switch') {
