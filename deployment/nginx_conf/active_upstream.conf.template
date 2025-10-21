@@ -11,9 +11,10 @@ server {
     }
 
     location /cf-frontend/ {
-        proxy_pass http://frontend/;  # note trailing slash
+        proxy_pass http://frontend;  # <-- no trailing slash
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
+
 }

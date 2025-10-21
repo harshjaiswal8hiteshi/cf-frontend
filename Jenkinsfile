@@ -81,75 +81,21 @@ pipeline {
             }
         }
 
-        stage('Setup Nginx Config') {
-            steps {
-                script {
-                    echo "📝 Setting up Nginx configuration directory..."
-                    sh """
-                        mkdir -p ${env.WORKSPACE}/nginx_conf
-                        
-                        # Create the template if it doesn't exist
-                        cat > ${env.WORKSPACE}/nginx_conf/active_upstream.conf.template << 'EOF'
-upstream frontend {
-    server __FRONTEND_CONTAINER__:3000;
-}
-
-server {
-    listen 80;
-
-    # Redirect /cf-frontend → /cf-frontend/
-    location = /cf-frontend {
-        return 301 /cf-frontend/;
-    }
-
-    location /cf-frontend/ {
-        proxy_pass http://frontend/;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-    }
-}
-EOF
-                        
-                        # Create initial config pointing to blue
-                        cp ${env.WORKSPACE}/nginx_conf/active_upstream.conf.template \
-                           ${env.WORKSPACE}/nginx_conf/active_upstream.conf
-                        
-                        sed -i 's|__FRONTEND_CONTAINER__|frontend-blue|g' \
-                            ${env.WORKSPACE}/nginx_conf/active_upstream.conf
-                        
-                        echo "📋 Initial Nginx config created"
-                        cat ${env.WORKSPACE}/nginx_conf/active_upstream.conf
-                    """
-                }
-            }
-        }
-
         stage('Ensure Nginx Container') {
             steps {
                 script {
-                    def nginxExists = sh(script: "docker ps -q -f name=nginx-proxy || true", returnStdout: true).trim()
+                    def nginxExists = sh(script: "docker ps --format '{{.Names}}' | grep nginx-proxy || true", returnStdout: true).trim()
                     if (!nginxExists) {
                         echo "🚀 Starting Nginx proxy container..."
+                        // Use Jenkins workspace folder for config instead of /etc/nginx/conf.d on host
                         sh """
+                            mkdir -p ${env.WORKSPACE}/nginx_conf
                             docker run -d \
                                 --name nginx-proxy \
                                 --network ${NETWORK} \
                                 -p 80:80 \
                                 -v ${env.WORKSPACE}/nginx_conf:/etc/nginx/conf.d \
                                 ${NGINX_IMAGE}
-                            
-                            # Wait for nginx to start
-                            sleep 3
-                            
-                            # Verify nginx started
-                            docker ps | grep nginx-proxy
-                            docker exec nginx-proxy nginx -t
                         """
                     } else {
                         echo "✅ Nginx proxy container already running."
@@ -157,6 +103,7 @@ EOF
                 }
             }
         }
+
 
         stage('Build Docker Image') {
             steps {
@@ -171,11 +118,10 @@ EOF
             steps {
                 script {
                     // Determine current active container
-                    def blueRunning = sh(script: "docker ps -q -f name=frontend-blue || true", returnStdout: true).trim()
-                    def greenRunning = sh(script: "docker ps -q -f name=frontend-green || true", returnStdout: true).trim()
+                    def activeContainer = sh(script: "docker ps --format '{{.Names}}' | grep frontend-blue || true", returnStdout: true).trim()
 
-                    // Decide new version (deploy to the one not running, or green if both/neither running)
-                    def newVersion = blueRunning ? "green" : "blue"
+                    // Decide new version
+                    def newVersion = (activeContainer == "frontend-blue") ? "green" : "blue"
                     def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
 
                     echo "🧱 Deploying new ${newVersion} container on port ${newPort}"
@@ -203,25 +149,25 @@ EOF
                 script {
                     echo "🩺 Checking health of frontend-${env.NEW_VERSION}..."
                     
-                    def retries = 12
+                    def retries = 10
                     def success = false
 
                     echo "⏳ Waiting for container startup..."
-                    sleep 10
+                    sleep 15
 
                     for (int i = 0; i < retries; i++) {
                         def status = sh(
                             script: """
                                 docker run --rm --network ${NETWORK} ${CURL_IMAGE} \
                                 -L -s -o /dev/null -w '%{http_code}' \
-                                http://frontend-${env.NEW_VERSION}:3000/cf-frontend/api/health/ || echo '000'
+                                http://frontend-${env.NEW_VERSION}:3000/cf-frontend/api/health || echo '000'
                             """,
                             returnStdout: true
                         ).trim()
 
-                        echo "Health check attempt ${i + 1}/${retries}: HTTP ${status}"
+                        echo "Health check attempt ${i + 1}: HTTP ${status}"
 
-                        if (status == "200" || status == "301" || status == "302") {
+                        if (status == "200" || status == "301" || status == "302" || status == "308") {
                             success = true
                             echo "✅ Health check passed! HTTP ${status}"
                             break
@@ -231,11 +177,9 @@ EOF
 
                     if (!success) {
                         echo "📋 Container logs:"
-                        sh "docker logs frontend-${env.NEW_VERSION} | tail -50"
+                        sh "docker logs frontend-${env.NEW_VERSION} | tail -30"
                         echo "🔍 Container status:"
                         sh "docker ps -a | grep frontend-${env.NEW_VERSION}"
-                        echo "🔍 Network info:"
-                        sh "docker network inspect ${NETWORK} | grep frontend-${env.NEW_VERSION} || true"
                         sh "docker rm -f frontend-${env.NEW_VERSION} || true"
                         error "❌ Deployment failed: new container did not respond correctly"
                     }
@@ -246,32 +190,41 @@ EOF
         stage('Switch Traffic') {
             steps {
                 script {
-                    def activeBackend = "frontend-${env.NEW_VERSION}"
+                    def activeBackend = (env.NEW_VERSION == "blue") ? "frontend-blue" : "frontend-green"
                     echo "🔁 Switching Nginx to route traffic to ${activeBackend}..."
 
+                    // Debug: show workspace
+                    sh "echo WORKSPACE=${env.WORKSPACE}"
+
+                    // Copy template and replace placeholder
                     sh """
-                        echo "🔍 Current nginx config:"
-                        cat ${env.WORKSPACE}/nginx_conf/active_upstream.conf
-                        
-                        # Create new config from template
-                        cp ${env.WORKSPACE}/nginx_conf/active_upstream.conf.template \
-                           ${env.WORKSPACE}/nginx_conf/active_upstream.conf
-                        
-                        # Replace placeholder
+                        # Debug: list files before copy
+                        echo "🔍 Files in nginx_conf before copy:"
+                        ls -l "${env.WORKSPACE}/deployment/nginx_conf"
+
+                        cp "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf.template" \
+                        "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf"
+
+                        # Debug: list files after copy
+                        echo "🔍 Files in nginx_conf after copy:"
+                        ls -l "${env.WORKSPACE}/deployment/nginx_conf"
+
+                        # Debug: show file content before sed
+                        echo "🔍 active_upstream.conf content before sed:"
+                        cat "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf"
+
                         sed -i "s|__FRONTEND_CONTAINER__|${activeBackend}|g" \
-                            ${env.WORKSPACE}/nginx_conf/active_upstream.conf
-                        
-                        echo "🔍 New nginx config:"
-                        cat ${env.WORKSPACE}/nginx_conf/active_upstream.conf
-                        
-                        # Test nginx config
+                            "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf"
+
+                        # Debug: show file content after sed
+                        echo "🔍 active_upstream.conf content after sed:"
+                        cat "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf"
+
+                        # Debug: test nginx config inside container
                         docker exec nginx-proxy nginx -t
-                        
+
                         # Reload nginx
                         docker exec nginx-proxy nginx -s reload
-                        
-                        # Wait for reload
-                        sleep 2
                     """
 
                     echo "✅ Nginx now routes all traffic to ${activeBackend}"
@@ -279,44 +232,44 @@ EOF
             }
         }
 
+        stage('Debug Nginx Network') {
+            steps {
+                script {
+                    sh """
+                        echo "🛠️ Inspecting containers in network ecosystem_default..."
+                        docker network inspect ecosystem_default
+
+                        echo "🛠️ Ping frontend-blue from nginx-proxy..."
+                        docker exec nginx-proxy ping -c 4 frontend-blue || true
+
+                        echo "🛠️ Curl frontend-blue from nginx-proxy..."
+                        docker exec nginx-proxy curl -I http://frontend-blue:3000/cf-frontend/api/health || true
+                    """
+                }
+            }
+        }
+
         stage('Verify Traffic Switch') {
             steps {
                 script {
-                    echo "🌐 Verifying Nginx routing through port 80..."
+                    echo "🌐 Verifying Nginx routing..."
 
-                    def retries = 5
-                    def success = false
-
-                    for (int i = 0; i < retries; i++) {
-                        // Test from within nginx container
-                        def httpCode = sh(
-                            script: """
-                                docker exec nginx-proxy \
-                                curl -s -o /dev/null -w '%{http_code}' \
-                                http://localhost/cf-frontend/api/health/
-                            """,
-                            returnStdout: true
-                        ).trim()
-
-                        echo "💡 Verification attempt ${i + 1}/${retries}: HTTP ${httpCode}"
-
-                        if (httpCode == "200") {
-                            success = true
-                            echo "✅ Verified Nginx routes correctly to frontend-${env.NEW_VERSION}"
-                            break
-                        }
-                        sleep 3
-                    }
-
-                    if (!success) {
-                        echo "⚠️ Verification warning: Nginx might not be routing correctly"
-                        echo "📋 Nginx error logs:"
-                        sh "docker exec nginx-proxy cat /var/log/nginx/error.log | tail -20 || true"
-                        echo "📋 Checking upstream health directly:"
-                        sh """
+                    // Run curl inside the nginx-proxy container to avoid network attach issues
+                    def httpCode = sh(
+                        script: """
                             docker exec nginx-proxy \
-                            curl -I http://frontend-${env.NEW_VERSION}:3000/cf-frontend/api/health/
-                        """
+                            curl -s -o /dev/null -w '%{http_code}' \
+                            http://frontend-green:3000/cf-frontend/api/health/
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    echo "💡 HTTP status code: ${httpCode}"
+
+                    if (httpCode != "200") {
+                        error "❌ Nginx verification failed (HTTP ${httpCode})"
+                    } else {
+                        echo "✅ Verified Nginx routes correctly to frontend-green"
                     }
                 }
             }
@@ -336,18 +289,9 @@ EOF
     post {
         success {
             echo "✅ Deployment completed successfully."
-            echo "🌐 Service accessible at: http://localhost/cf-frontend/"
         }
         failure {
             echo "❌ Deployment failed. Check Jenkins logs for details."
-            script {
-                sh """
-                    echo "📋 All running containers:"
-                    docker ps -a | grep frontend || true
-                    echo "📋 Nginx config:"
-                    cat ${env.WORKSPACE}/nginx_conf/active_upstream.conf || true
-                """
-            }
         }
     }
 }
