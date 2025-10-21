@@ -120,20 +120,38 @@ pipeline {
             steps {
                 script {
                     def activeBackend = (env.NEW_VERSION == "blue") ? "frontend-blue" : "frontend-green"
-                    echo "🔁 Switching Nginx to route traffic to ${activeBackend}"
+                    echo "🔁 Switching Nginx to route traffic to ${activeBackend}..."
 
                     sh """
-                        cp "\${WORKSPACE}/deployment/nginx_conf/active_upstream.conf.template" \
-                           "\${WORKSPACE}/nginx_conf/active_upstream.conf"
+                        # Ensure nginx_conf folder exists
+                        mkdir -p "\$WORKSPACE/nginx_conf"
 
-                        sed -i "s|__FRONTEND_CONTAINER__|${activeBackend}|g" "\${WORKSPACE}/nginx_conf/active_upstream.conf"
+                        # Copy template to target config
+                        cp "\$WORKSPACE/deployment/nginx_conf/active_upstream.conf.template" \
+                        "\$WORKSPACE/nginx_conf/active_upstream.conf"
 
+                        echo "🔍 active_upstream.conf content before sed:"
+                        cat "\$WORKSPACE/nginx_conf/active_upstream.conf"
+
+                        # Replace placeholder with the active backend
+                        sed -i "s|__FRONTEND_CONTAINER__|${activeBackend}|g" \
+                            "\$WORKSPACE/nginx_conf/active_upstream.conf"
+
+                        echo "🔍 active_upstream.conf content after sed:"
+                        cat "\$WORKSPACE/nginx_conf/active_upstream.conf"
+
+                        # Test nginx config inside container
                         docker exec nginx-proxy nginx -t
+
+                        # Reload nginx
                         docker exec nginx-proxy nginx -s reload
                     """
+
+                    echo "✅ Nginx now routes all traffic to ${activeBackend}"
                 }
             }
         }
+
 
         stage('Verify Nginx Config File') {
             steps {
