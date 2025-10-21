@@ -87,13 +87,15 @@ pipeline {
                     def nginxExists = sh(script: "docker ps --format '{{.Names}}' | grep nginx-proxy || true", returnStdout: true).trim()
                     if (!nginxExists) {
                         echo "🚀 Starting Nginx proxy container..."
+                        // Use Jenkins workspace folder for config instead of /etc/nginx/conf.d on host
                         sh """
+                            mkdir -p ${env.WORKSPACE}/nginx_conf
                             docker run -d \
-                            --name nginx-proxy \
-                            --network ${NETWORK} \
-                            -p 80:80 \
-                            -v /etc/nginx/conf.d:/etc/nginx/conf.d \
-                            ${NGINX_IMAGE}
+                                --name nginx-proxy \
+                                --network ${NETWORK} \
+                                -p 80:80 \
+                                -v ${env.WORKSPACE}/nginx_conf:/etc/nginx/conf.d \
+                                ${NGINX_IMAGE}
                         """
                     } else {
                         echo "✅ Nginx proxy container already running."
@@ -101,6 +103,7 @@ pipeline {
                 }
             }
         }
+
 
         stage('Build Docker Image') {
             steps {
@@ -190,10 +193,9 @@ pipeline {
                     def activeBackend = (env.NEW_VERSION == "blue") ? "frontend-blue:3000" : "frontend-green:3000"
                     echo "🔁 Switching Nginx to route traffic to ${activeBackend}..."
 
-                    sh "sudo mkdir -p /etc/nginx/conf.d"
-
+                    // Write active upstream inside Jenkins workspace (no sudo)
                     sh """
-                        echo "server ${activeBackend};" | sudo tee /etc/nginx/conf.d/active_upstream.conf
+                        echo "server ${activeBackend};" > ${env.WORKSPACE}/nginx_conf/active_upstream.conf
                         docker exec nginx-proxy nginx -s reload
                     """
 
