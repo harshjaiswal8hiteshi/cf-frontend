@@ -195,10 +195,10 @@ pipeline {
 
                     // Copy template and replace placeholder
                     sh """
-                        cp ${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf.template \
-                        ${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf
-                        sed -i "s/__FRONTEND_CONTAINER__/${activeBackend}/g" \
-                        ${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf
+                        cp "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf.template" \
+                        "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf"
+                        sed -i "s|__FRONTEND_CONTAINER__|${activeBackend}|g" \
+                        "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf"
                         docker exec nginx-proxy nginx -s reload
                     """
 
