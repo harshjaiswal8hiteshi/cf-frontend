@@ -249,17 +249,17 @@ pipeline {
             }
         }
 
-
         stage('Verify Traffic Switch') {
             steps {
                 script {
                     echo "🌐 Verifying Nginx routing..."
 
-                    // Run curl inside the Docker network
+                    // Run curl inside the nginx-proxy container to avoid network attach issues
                     def httpCode = sh(
                         script: """
-                            docker run --rm --network ecosystem_default alpine/curl:latest \
-                            -s -o /dev/null -w '%{http_code}' http://nginx-proxy/cf-frontend/api/health
+                            docker exec nginx-proxy \
+                            curl -s -o /dev/null -w '%{http_code}' \
+                            http://frontend-green:3000/cf-frontend/api/health/
                         """,
                         returnStdout: true
                     ).trim()
@@ -274,7 +274,6 @@ pipeline {
                 }
             }
         }
-
 
         stage('Cleanup Old Container') {
             steps {
