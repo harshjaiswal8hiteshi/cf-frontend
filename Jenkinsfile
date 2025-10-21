@@ -87,14 +87,23 @@ pipeline {
                     def nginxExists = sh(script: "docker ps --format '{{.Names}}' | grep nginx-proxy || true", returnStdout: true).trim()
                     if (!nginxExists) {
                         echo "🚀 Starting Nginx proxy container..."
-                        // Use Jenkins workspace folder for config instead of /etc/nginx/conf.d on host
+
+                        // Ensure nginx_conf folder exists
                         sh """
-                            mkdir -p ${env.WORKSPACE}/nginx_conf
+                            mkdir -p "${env.WORKSPACE}/nginx_conf"
+
+                            # If template exists, copy as default config
+                            if [ -f "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf.template" ]; then
+                                cp "${env.WORKSPACE}/deployment/nginx_conf/active_upstream.conf.template" \
+                                "${env.WORKSPACE}/nginx_conf/active_upstream.conf"
+                            fi
+
+                            # Start Nginx container with proper quoted mount
                             docker run -d \
                                 --name nginx-proxy \
                                 --network ${NETWORK} \
                                 -p 80:80 \
-                                -v ${env.WORKSPACE}/nginx_conf:/etc/nginx/conf.d \
+                                -v "${env.WORKSPACE}/nginx_conf:/etc/nginx/conf.d" \
                                 ${NGINX_IMAGE}
                         """
                     } else {
