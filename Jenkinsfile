@@ -209,7 +209,11 @@ pipeline {
                 script {
                     echo "🌐 Verifying Nginx routing..."
                     def status = sh(
-                        script: "docker run --rm --network ${NETWORK} ${CURL_IMAGE} -s -o /dev/null -w '%{http_code}' http://localhost/cf-frontend/api/health",
+                        script: """
+                            docker run --rm --network ${NETWORK} ${CURL_IMAGE} \
+                            -s -o /dev/null -w '%{http_code}' \
+                            http://nginx-proxy/cf-frontend/api/health
+                        """,
                         returnStdout: true
                     ).trim()
 
@@ -221,6 +225,7 @@ pipeline {
                 }
             }
         }
+
 
         stage('Cleanup Old Container') {
             steps {
