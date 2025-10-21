@@ -1,15 +1,19 @@
 upstream frontend {
-    server __FRONTEND_CONTAINER__:3000;
+    server frontend-blue:3000;
 }
 
 server {
     listen 80;
 
+    # Redirect /cf-frontend → /cf-frontend/
+    location = /cf-frontend {
+        return 301 /cf-frontend/;
+    }
+
     location /cf-frontend/ {
-        proxy_pass http://frontend/;  # <-- added trailing slash
+        proxy_pass http://frontend/;  # note trailing slash
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
-
 }
