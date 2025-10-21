@@ -244,8 +244,6 @@ pipeline {
             }
         }
 
-
-
         stage('Cleanup Old Container') {
             steps {
                 script {
