@@ -232,6 +232,22 @@ pipeline {
             }
         }
 
+        stage('Debug Nginx Network') {
+            steps {
+                script {
+                    sh """
+                        echo "🛠️ Inspecting containers in network ecosystem_default..."
+                        docker network inspect ecosystem_default
+
+                        echo "🛠️ Ping frontend-blue from nginx-proxy..."
+                        docker exec nginx-proxy ping -c 4 frontend-blue || true
+
+                        echo "🛠️ Curl frontend-blue from nginx-proxy..."
+                        docker exec nginx-proxy curl -I http://frontend-blue:3000/cf-frontend/api/health || true
+                    """
+                }
+            }
+        }
 
 
         stage('Verify Traffic Switch') {
