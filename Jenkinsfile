@@ -46,35 +46,6 @@ pipeline {
             }
         }
 
-        stage('Ensure Nginx Container') {
-            steps {
-                script {
-                    def nginxExists = sh(script: "docker ps --format '{{.Names}}' | grep nginx-proxy || true", returnStdout: true).trim()
-                    if (!nginxExists) {
-                        echo "🚀 Starting Nginx proxy container..."
-                        // Ensure nginx_conf exists
-                        sh """
-                            mkdir -p "\${WORKSPACE}/nginx_conf"
-
-                            # Copy template to nginx_conf if not exists
-                            if [ ! -f "\${WORKSPACE}/nginx_conf/active_upstream.conf" ]; then
-                                cp "\${WORKSPACE}/deployment/nginx_conf/active_upstream.conf.template" \
-                                   "\${WORKSPACE}/nginx_conf/active_upstream.conf"
-                            fi
-
-                            docker run -d --name nginx-proxy \
-                                --network ${NETWORK} \
-                                -p 80:80 \
-                                -v "\${WORKSPACE}/nginx_conf:/etc/nginx/conf.d" \
-                                ${NGINX_IMAGE}
-                        """
-                    } else {
-                        echo "✅ Nginx proxy container already running."
-                    }
-                }
-            }
-        }
-
 
         stage('Build Docker Image') {
             steps {
