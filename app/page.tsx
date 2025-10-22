@@ -190,6 +190,7 @@ export default function Home() {
             boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
             overflow: 'hidden'
           }}>
+            
             <div style={{
               background: 'linear-gradient(to right, #3b82f6, #2563eb)',
               padding: '24px'
