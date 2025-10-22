@@ -87,67 +87,6 @@ pipeline {
             }
         }
 
-        stage('Switch Traffic') {
-            steps {
-                script {
-                    def activeBackend = (env.NEW_VERSION == "blue") ? "frontend-blue" : "frontend-green"
-                    echo "🔁 Switching Nginx to route traffic to ${activeBackend}..."
-
-                    sh """
-                        # Ensure nginx_conf folder exists
-                        mkdir -p "\$WORKSPACE/nginx_conf"
-
-                        # Copy template to target config
-                        cp "\$WORKSPACE/deployment/nginx_conf/active_upstream.conf.template" \
-                        "\$WORKSPACE/nginx_conf/active_upstream.conf"
-
-                        echo "🔍 active_upstream.conf content before sed:"
-                        cat "\$WORKSPACE/nginx_conf/active_upstream.conf"
-
-                        # Replace placeholder with the active backend
-                        sed -i "s|__FRONTEND_CONTAINER__|${activeBackend}|g" \
-                            "\$WORKSPACE/nginx_conf/active_upstream.conf"
-
-                        echo "🔍 active_upstream.conf content after sed:"
-                        cat "\$WORKSPACE/nginx_conf/active_upstream.conf"
-
-                        # Test nginx config inside container
-                        docker exec nginx-proxy nginx -t
-
-                        # Reload nginx
-                        docker exec nginx-proxy nginx -s reload
-                    """
-
-                    echo "✅ Nginx now routes all traffic to ${activeBackend}"
-                }
-            }
-        }
-
-
-        stage('Verify Nginx Config File') {
-            steps {
-                script {
-                    def confFile = "${WORKSPACE}/nginx_conf/active_upstream.conf"
-                    echo "🔍 Checking if Nginx config exists: ${confFile}"
-                    def exists = sh(script: "[ -f \"${confFile}\" ] && echo 'yes' || echo 'no'", returnStdout: true).trim()
-                    if (exists != 'yes') { error "❌ Nginx config file not found: ${confFile}" }
-                    else { echo "✅ Nginx config file exists." }
-                }
-            }
-        }
-
-        stage('Verify Traffic Switch') {
-            steps {
-                script {
-                    echo "🌐 Verifying Nginx routing..."
-                    def httpCode = sh(script: "docker exec nginx-proxy curl -s -o /dev/null -w '%{http_code}' http://frontend-${env.NEW_VERSION}:3000/cf-frontend/api/health/", returnStdout: true).trim()
-                    echo "💡 HTTP status code: ${httpCode}"
-                    if (httpCode != '200') { error "❌ Nginx routing verification failed" }
-                    else { echo "✅ Verified Nginx routes correctly to frontend-${env.NEW_VERSION}" }
-                }
-            }
-        }
-
         stage('Cleanup Old Container') {
             steps {
                 script {
