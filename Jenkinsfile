@@ -38,29 +38,36 @@ pipeline {
         stage('Ensure Base Images') {
             steps {
                 script {
-                    ['node:18-alpine', 'nginx:1.27-alpine', 'alpine/curl:latest'].each { img ->
+                    def images = ['node:18-alpine', 'nginx:1.27-alpine', 'alpine/curl:latest']
+                    images.each { img ->
                         def exists = sh(script: "docker images -q ${img} || true", returnStdout: true).trim()
-                        if (!exists) { sh "docker pull ${img}" }
+                        if (!exists) {
+                            sh "docker pull ${img}"
+                        }
                     }
                 }
             }
         }
 
-
         stage('Build Docker Image') {
             steps {
-                script { sh "docker build -t ${IMAGE_TAG} ." }
+                script {
+                    sh "docker build -t ${IMAGE_TAG} ."
+                }
             }
         }
 
         stage('Deploy New Instance') {
             steps {
                 script {
+                    // Determine active and new version
                     def activeContainer = sh(script: "docker ps --format '{{.Names}}' | grep frontend-blue || true", returnStdout: true).trim()
                     def newVersion = (activeContainer == "frontend-blue") ? "green" : "blue"
                     def newPort = (newVersion == "blue") ? BLUE_PORT : GREEN_PORT
 
                     echo "🧱 Deploying new ${newVersion} container on port ${newPort}"
+
+                    // Run new container
                     sh "docker rm -f frontend-${newVersion} || true"
                     sh "docker run -d --name frontend-${newVersion} --network ${NETWORK} -p ${newPort}:3000 ${IMAGE_TAG}"
 
@@ -77,12 +84,29 @@ pipeline {
                     sleep 15
                     def success = false
                     for (int i = 0; i < 10; i++) {
-                        def status = sh(script: "docker run --rm --network ${NETWORK} ${CURL_IMAGE} -s -o /dev/null -w '%{http_code}' http://frontend-${env.NEW_VERSION}:3000/cf-frontend/api/health || echo '000'", returnStdout: true).trim()
+                        def status = sh(
+                            script: "docker run --rm --network ${NETWORK} ${CURL_IMAGE} -s -o /dev/null -w '%{http_code}' http://frontend-${env.NEW_VERSION}:3000/cf-frontend/api/health || echo '000'",
+                            returnStdout: true
+                        ).trim()
                         echo "Health check attempt ${i+1}: HTTP ${status}"
-                        if (['200','301','302','308'].contains(status)) { success = true; break }
+                        if (['200','301','302','308'].contains(status)) {
+                            success = true
+                            break
+                        }
                         sleep 5
                     }
-                    if (!success) { error "❌ Health check failed for frontend-${env.NEW_VERSION}" }
+                    if (!success) {
+                        error "❌ Health check failed for frontend-${env.NEW_VERSION}"
+                    }
+                }
+            }
+        }
+
+        stage('Switch Nginx Upstream') {
+            steps {
+                script {
+                    echo "🔁 Switching Nginx upstream to frontend-${env.NEW_VERSION}"
+                    sh "docker exec nginx /usr/local/bin/toggle-cf-frontend.sh ${env.NEW_VERSION}"
                 }
             }
         }
@@ -91,18 +115,20 @@ pipeline {
             steps {
                 script {
                     def oldVersion = (env.NEW_VERSION == "blue") ? "green" : "blue"
-                    echo "🧹 Cleaning up old container: frontend-${oldVersion}"
+                    echo "🧹 Removing old container: frontend-${oldVersion}"
                     sh "docker rm -f frontend-${oldVersion} || true"
                 }
             }
         }
 
-        
-        
     }
 
     post {
-        success { echo "✅ Deployment completed successfully." }
-        failure { echo "❌ Deployment failed. Check Jenkins logs for details." }
+        success {
+            echo "✅ Deployment completed successfully."
+        }
+        failure {
+            echo "❌ Deployment failed. Check Jenkins logs for details."
+        }
     }
 }
