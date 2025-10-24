@@ -3,6 +3,7 @@ export default function handler(req, res) {
   res.status(200).json({ 
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    service: 'frontend'
+    service: 'frontend',
+    version:'1.0'
   });
 }
