@@ -105,8 +105,55 @@ pipeline {
         stage('Switch Nginx Upstream') {
             steps {
                 script {
-                    echo "🔁 Switching Nginx upstream to frontend-${env.NEW_VERSION}"
-                    sh "docker exec nginx /usr/local/bin/toggle-cf-frontend.sh ${env.NEW_VERSION}"
+                echo "🔁 Switching Nginx upstream to frontend-${env.NEW_VERSION}"
+
+                // capture current upstream to allow rollback
+                def currentUpstream = sh(script: "docker exec nginx sh -c \"grep -Eo 'server[[:space:]]+[^[:space:]]+:3000' /etc/nginx/conf.d/cf-frontend.conf | head -n1 | awk '{print \$2}' || echo 'unknown'\"",
+                                        returnStdout: true).trim()
+                echo "Current upstream (before switch): ${currentUpstream}"
+
+                // run toggle inside nginx container
+                def toggleExit = sh(script: "docker exec nginx /usr/local/bin/toggle-cf-frontend.sh ${env.NEW_VERSION}", returnStatus: true)
+                if (toggleExit != 0) {
+                    error "❌ Toggle script failed (exit ${toggleExit}). Aborting deploy."
+                }
+
+                // give nginx a moment
+                sleep 2
+                }
+            }
+        }
+
+        stage('Verify Switch & Cleanup') {
+            steps {
+                script {
+                def verifySuccess = false
+
+                // verify Nginx routes to new backend by curling nginx from the same docker network
+                for (int i = 0; i < 8; i++) {
+                    def code = sh(script: "docker run --rm --network ${NETWORK} ${CURL_IMAGE} -s -o /dev/null -w '%{http_code}' http://nginx/cf-frontend/api/health || echo '000'",
+                                returnStdout: true).trim()
+                    echo "Post-switch verify attempt ${i+1}: HTTP ${code}"
+                    if (code == '200' || code == '301' || code == '302' || code == '308') { verifySuccess = true; break }
+                    sleep 3
+                }
+
+                if (!verifySuccess) {
+                    // rollback to previous upstream
+                    echo "❌ Verification failed. Rolling back to previous upstream..."
+                    // derive previous name from env.NEW_VERSION
+                    def prev = (env.NEW_VERSION == 'blue') ? 'green' : 'blue'
+                    def rbExit = sh(script: "docker exec nginx /usr/local/bin/toggle-cf-frontend.sh ${prev}", returnStatus: true)
+                    if (rbExit != 0) {
+                    echo "⚠️ Rollback toggle failed (exit ${rbExit}) — manual intervention required"
+                    }
+                    error "Deployment verification failed after switch; rollback attempted."
+                }
+
+                // verification succeeded: remove old container
+                def oldVersion = (env.NEW_VERSION == 'blue') ? 'green' : 'blue'
+                echo "✅ Verified. Removing old container: frontend-${oldVersion}"
+                sh "docker rm -f frontend-${oldVersion} || true"
                 }
             }
         }
