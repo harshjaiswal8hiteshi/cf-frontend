@@ -4,6 +4,6 @@ export default function handler(req, res) {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     service: 'frontend',
-    version:'10.0'
+    version:'11.0'
   });
 }
